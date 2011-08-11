@@ -14,6 +14,7 @@
 #include <QAbstractSocket>
 #include <QSslSocket>
 #include <QNetworkReply>
+#include <QShortcut>
 class KQOAuthManager;
 class KQOAuthRequest;
 //class KQOAuthRequest_XAuth;
@@ -28,13 +29,11 @@ class Widget : public QWidget {
 public:
     explicit Widget(QWidget *parent = 0);
     ~Widget();
+    bool initializeOwnPostsWidgets();
+    bool replacePlainTextEditContent(int i, QString str);
+    bool setShortCutKeyAndContext(QShortcut *sc, QKeySequence s, Qt::ShortcutContext c);
 
 public slots:
-    void receive(QList<QSslError> e);
-    void cError(QAbstractSocket::SocketError);
-    void readyRead();
-    void cState(QAbstractSocket::SocketState);
-    void slotError(QNetworkReply::NetworkError);
 
 protected:
     void keyPressEvent(QKeyEvent *);
@@ -49,12 +48,30 @@ private slots:
     void onAuthorizedRequestDone();
     void onRequestReady(QByteArray response);
     void onRequestReadyTimeline(QByteArray response);
+    void onRequestReadyOwnPosts(QByteArray);
     void sendTweet(QString tweet);
+    void receive(QList<QSslError> e);
+    void cError(QAbstractSocket::SocketError);
+    void readyRead();
+    void cState(QAbstractSocket::SocketState);
+    void slotError(QNetworkReply::NetworkError);
     void on_pushButton_clicked();
     void on_pushButton_2_clicked();
     void on_pushButton_3_clicked();
 
     void on_lineEdit_2_editingFinished();
+
+    void on_pushButton_4_clicked();
+
+    void on_lineEdit_2_textChanged(const QString &arg1);
+
+    void on_lineEdit_3_textChanged(const QString &arg1);
+
+    void on_lineEdit_4_textChanged(const QString &arg1);
+
+    void on_lineEdit_5_textChanged(const QString &arg1);
+
+    void on_lineEdit_6_textChanged(const QString &arg1);
 
 private:
     Ui::Widget *ui;

@@ -12,13 +12,11 @@ TEMPLATE = app
 
 SOURCES += main.cpp\
     widget.cpp \
-    extrapushbutton.cpp \
-    separatorline.cpp
+    extrapushbutton.cpp
 
 HEADERS  += \
     widget.h \
-    extrapushbutton.h \
-    separatorline.h
+    extrapushbutton.h
 
 FORMS    += \
     widget.ui
