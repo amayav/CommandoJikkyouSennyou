@@ -1,0 +1,13 @@
+CommandoJikkyouSennyou and the source is licensed under the GNU Lesser General Public
+License (LGPL). For more information, visit http://www.gnu.org/licenses/lgpl.html
+This library is written by amayav (vamayav@yahoo.co.jp)
+
+
+This application is using following files.
+
+kqoauth library and the source is licensed under the GNU Lesser General Public
+License (LGPL). For more information, visit http://www.gnu.org/licenses/lgpl.html
+This library is written by Johan Paul (johan.paul@gmail.com)
+
+picojson is licensed under 2-clause BSD license.
+This parser is provided by Cybozu Labs (http://coderepos.org/share/browser/lang/cplusplus/picojson/trunk/picojson.h).

@@ -33,32 +33,14 @@ SOURCES += main.cpp\
     widget.cpp \
     extrapushbutton.cpp \
     widgetdomain.cpp \
-    latesttweetsfortime.cpp \
-    kqoauth-kqoauth/src/kqoauthutils.cpp \
-    kqoauth-kqoauth/src/kqoauthrequest_xauth.cpp \
-    kqoauth-kqoauth/src/kqoauthrequest_1.cpp \
-    kqoauth-kqoauth/src/kqoauthrequest.cpp \
-    kqoauth-kqoauth/src/kqoauthmanager.cpp \
-    kqoauth-kqoauth/src/kqoauthauthreplyserver.cpp
+    latesttweetsfortime.cpp
 
 HEADERS  += \
     widget.h \
     extrapushbutton.h \
     picojson.h \
     widgetdomain.h \
-    latesttweetsfortime.h \
-    kqoauth-kqoauth/src/kqoauthutils.h \
-    kqoauth-kqoauth/src/kqoauthrequest_xauth_p.h \
-    kqoauth-kqoauth/src/kqoauthrequest_xauth.h \
-    kqoauth-kqoauth/src/kqoauthrequest_p.h \
-    kqoauth-kqoauth/src/kqoauthrequest_1.h \
-    kqoauth-kqoauth/src/kqoauthrequest.h \
-    kqoauth-kqoauth/src/kqoauthmanager_p.h \
-    kqoauth-kqoauth/src/kqoauthmanager.h \
-    kqoauth-kqoauth/src/kqoauthglobals.h \
-    kqoauth-kqoauth/src/kqoauthauthreplyserver_p.h \
-    kqoauth-kqoauth/src/kqoauthauthreplyserver.h
-
+    latesttweetsfortime.h
 FORMS    += \
     widget.ui
 
@@ -74,18 +56,3 @@ INCLUDEPATH += \
 DEPENDPATH += \
     $$PWD/kqoauth-kqoauth/src \
     $$PWD/kqoauth-kqoauth/include
-
-OTHER_FILES += \
-    kqoauth-kqoauth/src/src.pro \
-    kqoauth-kqoauth/src/kqoauthd_resource.rc
-
-
-
-
-
-
-
-
-
-
-
