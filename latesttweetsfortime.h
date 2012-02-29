@@ -17,30 +17,20 @@
  *  You should have received a copy of the GNU Lesser General Public License
  *  along with CommandoJikkyouSennyou.  If not, see <http://www.gnu.org/licenses/>.
  */
-#ifndef EXTRAPUSHBUTTON_H
-#define EXTRAPUSHBUTTON_H
-#include <QPushButton>
-
-class ExtraPushButton : public QPushButton
+#ifndef LATESTTWEETSFORTIME_H
+#define LATESTTWEETSFORTIME_H
+#include <QDateTime>
+class LatestTweetsForTime
 {
-    Q_OBJECT
 public:
-    ExtraPushButton(QString shortCutKey, QString string, QWidget *parent=0);
-    QString getShortCutKey();
-    QString getString();
-
-public slots:
-    void click();
-
-protected:
-    virtual void enterEvent(QEvent *e);
+    LatestTweetsForTime();
+    const QList<QDateTime> getPostedDateTimeList() const;
+    bool appendPostedDateTimeList(QDateTime &dateTime);
+    bool replacePostedDateTimeList(QDateTime &dateTime);
+    bool clear();
 
 private:
-    QString _shortCutKey, _string;
-
-signals:
-    void clicked(QString string);
-    void showingToolTip(QString toolTipString);
+    QList<QDateTime> _postedDateTimeList;
 };
 
-#endif // EXTRAPUSHBUTTON_H
+#endif // LATESTTWEETSFORTIME_H

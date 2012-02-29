@@ -3,20 +3,44 @@
 # Project created by QtCreator 2011-08-02T23:22:56
 #
 #-------------------------------------------------
-
-QT       += core gui xml network
+# CommandoJikkyouSennyou - Commando Jikkyou Sennyou Client for twitter for Qt.
+#
+# Author: amayav (vamayav@yahoo.co.jp)
+#
+#
+#  CommandoJikkyouSennyou is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Lesser General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  CommandoJikkyouSennyou is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Lesser General Public License for more details.
+#
+#  You should have received a copy of the GNU Lesser General Public License
+#  along with CommandoJikkyouSennyou.  If not, see <http://www.gnu.org/licenses/>.
+#
+QT       += core gui network
 
 TARGET = CommandoJikkyouSennyou
 TEMPLATE = app
-
+RC_FILE = icon.rc
+OBJECTS_DIR = temp
+MOC_DIR = temp
 
 SOURCES += main.cpp\
     widget.cpp \
-    extrapushbutton.cpp
+    extrapushbutton.cpp \
+    widgetdomain.cpp \
+    latesttweetsfortime.cpp
 
 HEADERS  += \
     widget.h \
-    extrapushbutton.h
+    extrapushbutton.h \
+    picojson.h \
+    widgetdomain.h \
+    latesttweetsfortime.h
 
 FORMS    += \
     widget.ui
@@ -24,21 +48,23 @@ FORMS    += \
 CONFIG += kqoauth
 
 unix:!symbian|win32: LIBS += \
-    $$PWD/kqoauth-kqoauth/lib/libkqoauthd0.a \
-    $$PWD/kqoauth-kqoauth/lib/kqoauthd0.dll \
-    $$PWD/qjson-qjson/lib/libqjson0.a \
-    $$PWD/qjson-qjson/lib/qjson0.dll \
-    $$PWD/openssl/lib/MinGW/ssleay32.a \
-    $$PWD/openssl/lib/MinGW/ssleay32.dll \
-    $$PWD/openssl/lib/MinGW/libeay32.a \
-    $$PWD/openssl/lib/MinGW/libeay32.dll \
+    $$PWD/kqoauth-kqoauth/lib/libkqoauth0.a \
+    $$PWD/kqoauth-kqoauth/libd/libkqoauthd0.a
 
 INCLUDEPATH += \
     $$PWD/kqoauth-kqoauth/src \
-    $$PWD/kqoauth-kqoauth/include \
-    $$PWD/qjson-qjson/src \
-    $$PWD/openssl/include
+    $$PWD/kqoauth-kqoauth/include
 DEPENDPATH += \
     $$PWD/kqoauth-kqoauth/src \
-    $$PWD/qjson-qjson/src \
-    $$PWD/openssl/include
+    $$PWD/kqoauth-kqoauth/include
+
+
+
+
+
+
+
+
+
+
+
