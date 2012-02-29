@@ -1,446 +1,454 @@
+/**
+ * CommandoJikkyouSennyou - Commando Jikkyou Sennyou Client for twitter for Qt.
+ *
+ * Author: amayav (vamayav@yahoo.co.jp)
+ *
+ *
+ *  CommandoJikkyouSennyou is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU Lesser General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  CommandoJikkyouSennyou is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public License
+ *  along with CommandoJikkyouSennyou.  If not, see <http://www.gnu.org/licenses/>.
+ */
 #include "widget.h"
 #include "ui_widget.h"
 #include <QTextCodec>
-#include <QDir>
 #include <QDebug>
-#include <QtXml/QDomDocument>
-#include <QUrl>
-#include <QSettings>
 #include <QKeyEvent>
 #include "extrapushbutton.h"
 #include <cmath>
 #include <QLayoutItem>
-#include <QSslCertificate>
-#include <QSslSocket>
-#include <QSslCipher>
-#include <QHostAddress>
-#include <QSslConfiguration>
-#include <QtAlgorithms>
-#include <qjson-qjson/src/parser.h>
 #include <QDateTime>
-#include <QShortcut>
+#include "picojson.h"
+#include <QSslConfiguration>
+#include <QSslCertificate>
+#include <QDirIterator>
+
+using namespace std;
+using namespace picojson;
+
+#define LATEST_NUMBER_FOR_TIME 128
+
+//QString _consumerKey("nXrjGagSLIQxCC4AmJ1J3g");
+//QString _consumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
 /*
   publidc functions
   */
-Widget::Widget(QWidget *parent) : QWidget(parent), ui(new Ui::Widget){
-    //-------------------------
-    // Qt特有のUTF-8設定
+Widget::Widget(QWidget *parent)
+    : QWidget(parent),
+      ui(new Ui::Widget),
+      _oauthManager(new KQOAuthManager(parent)),
+      _oauthRequest(new KQOAuthRequest),
+      _oauthSettings(new QSettings(qApp->applicationDirPath() + "/verification.ini",
+                                   QSettings::IniFormat)),
+      _shortCutKeysSettings(new QSettings(qApp->applicationDirPath() + "/key.txt",
+                                          QSettings::IniFormat)),
+      _sizeSettings(new QSettings(qApp->applicationDirPath() + "/size.ini",
+                                  QSettings::IniFormat)),
+      _proxy(new QNetworkProxy()),
+      _consumerKey(),
+      _consumerSecretKey(),
+      _clockCountTimer(new QTimer),
+      _latestTweetsForTime(),
+      _subject(new WidgetDomain)
+{
     QTextCodec::setCodecForCStrings(QTextCodec::codecForName("utf-8"));
     QTextCodec::setCodecForTr(QTextCodec::codecForName("utf-8"));
     QTextCodec::setCodecForLocale(QTextCodec::codecForName("utf-8"));
-    //-------------------------
 
     ui->setupUi(this);
+    this->setPostShortcutKeys();
+    this->setJikkyouShortcutKeys();
+    this->setWindowSize();
+    this->setProxyLineEdits();
+    this->setConsumerKeyAndConsumerSecretLineEdits();
+    this->setConsumerKeyAndConsumerSecret();
 
-    QString oauthIniName = qApp->applicationDirPath()
-            + "/verification.ini";
-    _oauthSettings = new QSettings(oauthIniName, QSettings::IniFormat);
+    // OAuth Settings
     _oauthSettings->setIniCodec("utf-8");
-    //-------------------------
-    // kQAOuthの初期化
-    _oauthRequest = new KQOAuthRequest;        // リクエスト用オブジェクト
-    _oauthManager = new KQOAuthManager(this);  // マネージャオブジェクト
-
-    _oauthManager->setNetworkManager(new QNetworkAccessManager);
-
-    connect(_oauthManager, SIGNAL(authorizedRequestDone()),
-            this, SLOT(onAuthorizedRequestDone()));
-
-    _oauthRequest->setEnableDebugOutput(true); // デバッグ出力ON
-    //  _oauthRequest->setEnableDebugOutput(false); // デバッグ出力OFF
-    //-------------------------
-
-    if (_oauthSettings->childKeys().size() == 3) {
-        // 既に認証キー取得済みならボタン２を有効にする
-        ui->pushButton_2->setEnabled(true);
-
+    if (_oauthSettings->childKeys().size() == 3) { //number, consumer_key, consumer_secret_key
         ui->lineEdit->setText(_oauthSettings->value("number").toString());
     }
 
-    QString shortCutKeysIniName = qApp->applicationDirPath()
-            + "/key.txt";
-    _shortCutKeysSettings = new QSettings(shortCutKeysIniName, QSettings::IniFormat);
-    _shortCutKeysSettings->setIniCodec("utf-8");
-    QStringList keyKeys = _shortCutKeysSettings->childKeys();
-    _keysHash = new QHash<QString,QString>();
-    for(int i=0;i<_shortCutKeysSettings->childKeys().size();++i)
-    {
-        _keysHash->insert(keyKeys.at(i), _shortCutKeysSettings->value(keyKeys.at(i)).toString());
-        ExtraPushButton *p = new ExtraPushButton(keyKeys.at(i),
-                                                 _shortCutKeysSettings->value(keyKeys.at(i)).toString(),
-                                                 this);
-        p->setToolTip(_shortCutKeysSettings->value(keyKeys.at(i)).toString());
-        ui->buttonsGridLayout->addWidget(p,0,i);
-        // Succession of slots can not go well.
-        connect(p, SIGNAL(clicked()), p, SLOT(click()));
-        connect(p, SIGNAL(clicked(QString)), this, SLOT(sendTweet(QString)));
-        connect(p, SIGNAL(showingToolTip(QString)), ui->plainTextEdit, SLOT(setPlainText(QString)));
-    }
+    this->initializeKQOAuth();
+    this->initializeOwnPostsWidgets();
+    this->updateData();
 
-    QString sizeIniName = qApp->applicationDirPath()
-            + "/size.ini";
-    _sizeSettings = new QSettings(sizeIniName, QSettings::IniFormat);
-    if(_sizeSettings->allKeys().count()==2)
-    {
-        resize(_sizeSettings->value("width").toInt(), _sizeSettings->value("height").toInt());
-    }
-    else
-    {
-        resize(200,200);
-    }
+    _clockCountTimer->setInterval(1000);
+    _clockCountTimer->start();
+    connect(_clockCountTimer, SIGNAL(timeout()), this, SLOT(countDownClock()), Qt::UniqueConnection);
+}
 
+Widget::~Widget() {
+    delete _oauthManager;
+    delete _oauthRequest;
+    delete _oauthSettings;
+    delete _shortCutKeysSettings;
+    delete _sizeSettings;
+    delete _proxy;
+    delete _clockCountTimer;
+    delete _subject;
+    delete ui;
+}
+
+bool Widget::initializeKQOAuth(){
+    _oauthManager->setNetworkManager(new QNetworkAccessManager);
+    connect(_oauthManager->networkManager(), SIGNAL(sslErrors(QNetworkReply*,QList<QSslError>)),
+            this, SLOT(receiveSSLError(QNetworkReply*,QList<QSslError>)), Qt::UniqueConnection);
+    _oauthRequest->setEnableDebugOutput(false);
+    return true;
+}
+
+bool Widget::setPostShortcutKeys(){
     // Short Cut Key for Post.
-    QShortcut *post1 = new QShortcut(ui->lineEdit_2);
-    QShortcut *post2 = new QShortcut(ui->lineEdit_3);
-    QShortcut *post3 = new QShortcut(ui->lineEdit_4);
-    QShortcut *post4 = new QShortcut(ui->lineEdit_5);
-    QShortcut *post5 = new QShortcut(ui->lineEdit_6);
     QList<QShortcut*> postShortCutList;
-    postShortCutList << post1 << post2 << post3 << post4 << post5;
-    for(int i=0;i<postShortCutList.size();++i)
-    {
-        this->setShortCutKeyAndContext(postShortCutList.at(i), QKeyStandard(Qt::CTRL + Qt::Key_Return), Qt::WidgetShortcut);
+    postShortCutList << new QShortcut(ui->lineEdit_2)
+                     << new QShortcut(ui->lineEdit_3)
+                     << new QShortcut(ui->lineEdit_4)
+                     << new QShortcut(ui->lineEdit_5)
+                     << new QShortcut(ui->lineEdit_6);
+    for(QList<QShortcut*>::const_iterator it = postShortCutList.begin();it != postShortCutList.end();++it){
+        this->setShortCutKeyAndContext(*it,
+                                       QKeySequence(Qt::CTRL + Qt::Key_Return),
+                                       Qt::WidgetShortcut);
+        connect(*it, SIGNAL(activated()), ui->postButton, SLOT(click()));
     }
+    return true;
+}
 
-    connect(post1, SIGNAL(activated()), ui->pushButton_4, SLOT(click()));
-    connect(post2, SIGNAL(activated()), ui->pushButton_4, SLOT(click()));
-    connect(post3, SIGNAL(activated()), ui->pushButton_4, SLOT(click()));
-    connect(post4, SIGNAL(activated()), ui->pushButton_4, SLOT(click()));
-    connect(post5, SIGNAL(activated()), ui->pushButton_4, SLOT(click()));
-
-    //initializeOwnPostsWidgets();
-    /*   QList<QSslCertificate> cList;
-
-    QFile f1(qApp->applicationDirPath() + "\\" + "v.cer");
-    f1.open(QIODevice::ReadOnly);
-    QSslCertificate sc(f1.readAll());
-    f1.close();
-
-    QFile f2(qApp->applicationDirPath() + "\\"  + "veri.cer");
-    f2.open(QIODevice::ReadOnly);
-    QSslCertificate sr(f2.readAll());
-    f2.close();
-
-    QFile f3(qApp->applicationDirPath() + "\\"  + "vt.cer");
-    f3.open(QIODevice::ReadOnly);
-    QSslCertificate st(f3.readAll());
-    f3.close();
-
-    QFile f4(qApp->applicationDirPath() + "\\"  + "vtt.cer");
-    f4.open(QIODevice::ReadOnly);
-    QSslCertificate stt(f4.readAll());
-    f4.close();
-
-    cList << sc << sr << st <<stt;
-    sock = new QSslSocket;
-    connect(sock, SIGNAL(sslErrors(QList<QSslError>)), this, SLOT(receive(QList<QSslError>)));
-    connect(sock, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(cError(QAbstractSocket::SocketError)));
-    connect(sock, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(cState(QAbstractSocket::SocketState)));
-    sock->setProtocol(QSsl::TlsV1);
-    sock->setPeerVerifyMode(QSslSocket::VerifyPeer);
-    sock->setPeerVerifyDepth(5);
-    sock->setCaCertificates(cList);
-    qDebug() << "[CLIENT]:  Attempting Connection...";
-    //sock->connectToHostEncrypted("userstream.twitter.com/2/user.json", 443);
-    sock->connectToHostEncrypted("userstream.twitter.com", 443);
-    //sock->connectToHostEncrypted("api.twitter.com", 443);
-
-    if(sock->waitForConnected())
-    {
-        qDebug("Connected");
+bool Widget::setJikkyouShortcutKeys(){
+    _shortCutKeysSettings->setIniCodec("utf-8");
+    ExtraPushButton *button;
+    for(int i=0;i<_shortCutKeysSettings->childKeys().size();++i){
+        _subject->getKeysHash()->insert(_shortCutKeysSettings->childKeys().at(i),
+                                        _shortCutKeysSettings->value(_shortCutKeysSettings->childKeys().at(i)).toString());
+        button = new ExtraPushButton(_shortCutKeysSettings->childKeys().at(i),
+                                     _shortCutKeysSettings->value(_shortCutKeysSettings->childKeys().at(i)).toString(),
+                                     this);
+        button->setToolTip(_shortCutKeysSettings->value(_shortCutKeysSettings->childKeys().at(i)).toString());
+        ui->buttonsGridLayout->addWidget(button,0,i);
+        // Succession of slots can not go well.
+        connect(button, SIGNAL(clicked()), button, SLOT(click()));
+        connect(button, SIGNAL(clicked(QString)), this, SLOT(sendTweet(QString)));
+        connect(button, SIGNAL(showingToolTip(QString)), ui->plainTextEdit, SLOT(setPlainText(QString)));
     }
+    return true;
+}
+
+bool Widget::setWindowSize(){
+    _sizeSettings->beginGroup("size");
+    if(_sizeSettings->value("width").isNull())
+        resize(200,200);
     else
-    {
-        qDebug("Disconnected");
+        resize(_sizeSettings->value("width").toInt(), _sizeSettings->value("height").toInt());
+    _sizeSettings->endGroup();
+    return true;
+}
+
+bool Widget::setProxyLineEdits(){
+    _sizeSettings->beginGroup("proxy");
+    if(_sizeSettings->value("hostName").isNull()){
+        _sizeSettings->endGroup();
+        return false;
+    }
+    _proxy->setHostName(_sizeSettings->value("hostName").toString());
+    _proxy->setPort(_sizeSettings->value("port").toInt());
+    _proxy->setUser(_sizeSettings->value("user").toString());
+    _proxy->setPassword(_sizeSettings->value("password").toString());
+    ui->proxyHostNameLineEdit->setText(_sizeSettings->value("hostName").toString());
+    ui->proxyPortLineEdit->setText(_sizeSettings->value("port").toString());
+    ui->proxyUserLineEdit->setText(_sizeSettings->value("user").toString());
+    ui->proxyPasswordLineEdit->setText(_sizeSettings->value("password").toString());
+    _sizeSettings->endGroup();
+    return true;
+}
+
+bool Widget::setConsumerKeyAndConsumerSecretLineEdits(){
+    _sizeSettings->beginGroup("consumerKey");
+    if(_sizeSettings->value("consumerKey").isNull()){
+        _sizeSettings->endGroup();
+        return false;
+    }
+    ui->consumerKeyLineEdit->setText(_sizeSettings->value("consumerKey").toString());
+    ui->consumerSecretKeyLineEdit->setText(_sizeSettings->value("consumerSecretKey").toString());
+    _sizeSettings->endGroup();
+    return true;
+}
+
+bool Widget::setConsumerKeyAndConsumerSecret(){
+    _consumerKey = ui->consumerKeyLineEdit->text();
+    _consumerSecretKey = ui->consumerSecretKeyLineEdit->text();
+    return true;
+}
+
+bool Widget::SSLconnect(KQOAuthRequest *request)
+{
+    try{
+        _oauthRequest = request;
+        QNetworkRequest networkRequest;
+        networkRequest.setUrl( _oauthRequest->requestEndpoint() );
+        QSslConfiguration sslcon;
+        sslcon.setCaCertificates(QSslCertificate::fromPath("./veri\\.cer",
+                                                           QSsl::Pem,
+                                                           QRegExp::RegExp));
+        if(sslcon.caCertificates().size()==0){
+            throw "There is not verification file \"veri.cer\".";
+        }
+        networkRequest.setSslConfiguration(sslcon);
+
+        //_oauthRequest->setCallbackUrl(QUrl("oob"));
+
+        networkRequest.setRawHeader("Authorization", makeAuthHeaderFrom(_oauthRequest->requestParameters()));
+
+        connect(_oauthManager->networkManager(), SIGNAL(finished(QNetworkReply *)),
+                _oauthManager, SLOT(onRequestReplyReceived(QNetworkReply *)), Qt::UniqueConnection);
+
+        if (_oauthRequest->httpMethod() == KQOAuthRequest::GET) {
+            // Get the requested additional params as a list of pairs we can give QUrl
+            QList< QPair<QString, QString> > urlParams;
+            for(int i=0; i<_oauthRequest->additionalParameters().keys().size(); i++) {
+                urlParams.append( qMakePair(_oauthRequest->additionalParameters().keys().at(i),
+                                            _oauthRequest->additionalParameters().values().at(i)) );
+            }
+
+            // Take the original URL and append the query params to it.
+            QUrl urlWithParams = networkRequest.url();
+            urlWithParams.setQueryItems(urlParams);
+            networkRequest.setUrl(urlWithParams);
+
+            // Submit the request including the params.
+            //_replyOfUserStreamsAPI = _oauthManager->networkManager()->get(networkRequest);
+            _subject->setReplyOfUserStreamsAPI(_oauthManager->networkManager()->get(networkRequest));
+            connect(_subject->getReplyOfUserStreamsAPI(), SIGNAL(readyRead()),
+                    this, SLOT(onReadyRead()), Qt::UniqueConnection);
+            connect(_subject->getReplyOfUserStreamsAPI(), SIGNAL(error(QNetworkReply::NetworkError)),
+                    _oauthManager, SLOT(slotError(QNetworkReply::NetworkError)), Qt::UniqueConnection);
+            return true;
+        } else if (_oauthRequest->httpMethod() == KQOAuthRequest::POST) {
+            networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, _oauthRequest->contentType());
+
+            qDebug() << networkRequest.rawHeaderList();
+            qDebug() << networkRequest.rawHeader("Authorization");
+            qDebug() << networkRequest.rawHeader("Content-Type");
+
+            QNetworkReply *reply;
+            if (_oauthRequest->contentType() == "application/x-www-form-urlencoded") {
+                reply = _oauthManager->networkManager()->post(networkRequest, _oauthRequest->requestBody());
+            } else {
+                reply = _oauthManager->networkManager()->post(networkRequest, _oauthRequest->rawData());
+            }
+
+            connect(reply, SIGNAL(error(QNetworkReply::NetworkError)),
+                    this, SLOT(slotError(QNetworkReply::NetworkError)), Qt::UniqueConnection);
+            return true;
+        }
+        qDebug() << "Unexpected HTTP Method.";
+        return false;
+    }catch(QString str){
+        qDebug() << "error" << str;
+        return false;
+    }
+}
+
+void Widget::onReadyRead()
+{
+    if( this->isOAuthed() == false) {
+        qDebug() << "There are not oauth_token or oauth_token_secret";
         return;
     }
-    if(sock->waitForEncrypted())
-    {
-        qDebug("Encrypted");
+    onRequestReadyTimeline(_subject->getReplyOfUserStreamsAPI()->readAll());
+}
+
+void Widget::receiveSSLError(QNetworkReply *reply, const QList<QSslError> &errors)
+{
+    for(int i=0;i<errors.size();++i) {
+        qDebug() << errors.at(i);
     }
-    else
-    {
-        qDebug("Discrypted");
-        return;
-    }
-    if(sock->open(QIODevice::ReadWrite)==false)
-    {
-        qDebug("Can not open.");
-        return;
-    }
-
-    qDebug("Writing");
-    if(false)
-    {
-        //QUrl url("https://api.twitter.com/1/statuses/home_timeline.json");
-        //QUrl url("https://userstream.twitter.com/2/user.json");
-        QUrl url("http://stream.twitter.com/1/filter.json");
-        _oauthRequest->initRequest(KQOAuthRequest::AuthorizedRequest, url);
-        _oauthRequest->setHttpMethod(KQOAuthRequest::GET); // GET指定
-        _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-        _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-        _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
-        _oauthRequest->setTokenSecret(
-                    _oauthSettings->value("oauth_token_secret").toString());
-
-        connect(sock, SIGNAL(readyRead()), this, SLOT(readyRead()));
-        disconnect(_oauthManager, SIGNAL(requestReady(QByteArray)));
-        connect(_oauthManager, SIGNAL(requestReady(QByteArray)),
-                this, SLOT(onRequestReadyTimeline(QByteArray)));
-        connect(_oauthManager, SIGNAL(authorizedRequestDone()),
-                this, SLOT(onAuthorizedRequestDone()));
-        //    _oauthManager->executeRequest(_oauthRequest);
-    }
-    else if(false)
-    {
-        QUrl url("https://api.twitter.com/1/statuses/update.xml");
-        _oauthRequest->initRequest(KQOAuthRequest::AuthorizedRequest,url);
-        _oauthRequest->setHttpMethod(KQOAuthRequest::POST); // POST指定
-        _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-        _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-        _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
-        _oauthRequest->setTokenSecret(_oauthSettings->value("oauth_token_secret").toString());
-
-        QString tweet("UserStreamsAPIさっぱり通らぬワロタ。");
-        KQOAuthParameters params;
-        params.insert("status", tweet);
-        _oauthRequest->setAdditionalParameters(params);
-        //    _oauthManager->executeRequest(_oauthRequest);
-    }
-    else if(false)
-    {
-        QUrl url("http://stream.twitter.com/1/statuses/filter.json");
-        _oauthRequest->initRequest(KQOAuthRequest::AuthorizedRequest,url);
-        _oauthRequest->setHttpMethod(KQOAuthRequest::POST); // POST指定
-        _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-        _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-        _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
-        _oauthRequest->setTokenSecret(_oauthSettings->value("oauth_token_secret").toString());
-
-        KQOAuthParameters params;
-        params.insert("follow", "2062439");
-        _oauthRequest->setAdditionalParameters(params);
-
-        connect(sock, SIGNAL(readyRead()), this, SLOT(readyRead()));
-        disconnect(_oauthManager, SIGNAL(requestReady(QByteArray)));
-        connect(_oauthManager, SIGNAL(requestReady(QByteArray)),
-                this, SLOT(onRequestReadyTimeline(QByteArray)));
-        connect(_oauthManager, SIGNAL(authorizedRequestDone()),
-                this, SLOT(onAuthorizedRequestDone()));
-        //    _oauthManager->executeRequest(_oauthRequest);
-    }
-    else
-    {
-        QUrl url("http://stream.twitter.com/1/sample.json");
-        _oauthRequest->initRequest(KQOAuthRequest::AuthorizedRequest, url);
-        _oauthRequest->setHttpMethod(KQOAuthRequest::GET); // GET指定
-        _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-        _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-        _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
-        _oauthRequest->setTokenSecret(
-                    _oauthSettings->value("oauth_token_secret").toString());
-
-        connect(sock, SIGNAL(readyRead()), this, SLOT(readyRead()));
-        disconnect(_oauthManager, SIGNAL(requestReady(QByteArray)));
-        connect(_oauthManager, SIGNAL(requestReady(QByteArray)),
-                this, SLOT(onRequestReadyTimeline(QByteArray)));
-        connect(_oauthManager, SIGNAL(authorizedRequestDone()),
-                this, SLOT(onAuthorizedRequestDone()));
-        //    _oauthManager->executeRequest(_oauthRequest);
-    }
-    QNetworkRequest networkRequest;
-    networkRequest.setUrl( _oauthRequest->requestEndpoint() );
-
-    QString serverString = "oob"; //To use client, "oauth_callback" value must be oob.
-    _oauthRequest->setCallbackUrl(QUrl(serverString));
-
-    // And now fill the request with "Authorization" header data.
-    QList<QByteArray> requestHeaders = _oauthRequest->requestParameters();
-    QByteArray authHeader;
-    bool first = true;
-    foreach (const QByteArray header, requestHeaders) {
-        if (!first) {
-            authHeader.append(", ");
-        } else {
-            authHeader.append("OAuth ");
-            first = false;
-        }
-
-        authHeader.append(header);
-    }
-    networkRequest.setRawHeader("Authorization", authHeader);
-    //connect(d->networkManager, SIGNAL(finished(QNetworkReply *)),
-    //this, SLOT(onRequestReplyReceived(QNetworkReply *)));
-    connect(_oauthManager->networkManager(), SIGNAL(finished(QNetworkReply *)),
-            _oauthManager, SLOT(onRequestReplyReceived(QNetworkReply *)));
-
-    networkRequest.setSslConfiguration(sock->sslConfiguration());
-
-    if (_oauthRequest->httpMethod() == KQOAuthRequest::GET) {
-        // Get the requested additional params as a list of pairs we can give QUrl
-        QList< QPair<QString, QString> > urlParams;
-
-        QList<QString> requestKeys = _oauthRequest->additionalParameters().keys();
-        QList<QString> requestValues = _oauthRequest->additionalParameters().values();
-
-        for(int i=0; i<requestKeys.size(); i++) {
-            urlParams.append( qMakePair(requestKeys.at(i),
-                                        requestValues.at(i))
-                              );
-        }
-        // Take the original URL and append the query params to it.
-        QUrl urlWithParams = networkRequest.url();
-        urlWithParams.setQueryItems(urlParams);
-        networkRequest.setUrl(urlWithParams);
-
-        qDebug() << networkRequest.rawHeader("Authorization");
-
-        // Submit the request including the params.
-        //QNetworkReply *reply = d->networkManager->get(networkRequest);
-        //QNetworkReply *reply = _oauthManager->networkManager()->get(networkRequest);
-        //qDebug() << reply->readAll();
-
-        //QByteArray array("GET /1/statuses/home_timeline.json");
-        //QByteArray array("GET /2/user.json");
-        QByteArray array("GET /1/statuses/sample.json");
-        array.append("\r\nAuthorization: " + authHeader);
-        //        array.append("HTTP/1.1\r\n");
-        //        .append("Accept: *\/\* \r\n")
-        //                .append("Accept-Language: ja\r\n")
-        //                .append("If-Modified-Since: Mon,04 Dec 2000 00:11:45 GMT; length=35\r\n")
-        //                .append("User-Agent: Mozilla/4.0(compatible; MSIE 5.5; Windows NT 5.0)\r\n");
-        //        array.append("Host: ").append("api.twitter.com").append("\r\n");
-        //        array.append("Host: ").append("userstream.twitter.com").append("\r\n");
-        //        .append("Connection: Keep-Alive");
-        qDebug() << array;
-        sock->write(array);
-
-//        connect(reply, SIGNAL(error(QNetworkReply::NetworkError)),
-//                this, SLOT(slotError(QNetworkReply::NetworkError)));
-    }
-    else if (_oauthRequest->httpMethod() == KQOAuthRequest::POST) {
-
-        networkRequest.setHeader(QNetworkRequest::ContentTypeHeader, _oauthRequest->contentType());
-
-        qDebug() << networkRequest.rawHeaderList();
-        qDebug() << networkRequest.rawHeader("Authorization");
-        qDebug() << networkRequest.rawHeader("Content-Type");
-
-        QNetworkReply *reply;
-        if (_oauthRequest->contentType() == "application/x-www-form-urlencoded") {
-            //reply = d->networkManager->post(networkRequest, _oauthRequest->requestBody());
-            reply = _oauthManager->networkManager()->post(networkRequest, _oauthRequest->requestBody());
-            qDebug() << "pp" << _oauthRequest->requestBody() << reply->readAll();
-        } else {
-            //reply = d->networkManager->post(networkRequest, _oauthRequest->rawData());
-            reply = _oauthManager->networkManager()->post(networkRequest, _oauthRequest->rawData());
-            qDebug() << "QQ" << _oauthRequest->rawData();
-        }
-
-        connect(reply, SIGNAL(error(QNetworkReply::NetworkError)),
-                this, SLOT(slotError(QNetworkReply::NetworkError)));
-    }
-
-*/
-    //        sock->disconnectFromHost();
-    //    }
 }
 
 bool Widget::setShortCutKeyAndContext(QShortcut *sc, QKeySequence s, Qt::ShortcutContext c)
 {
     sc->setKey(s);
     sc->setContext(c);
+    return true;
+}
+
+bool Widget::initializeRequest(QUrl url,
+                               KQOAuthRequest::RequestHttpMethod requestMethod,
+                               KQOAuthRequest::RequestType requestType)
+{
+    _oauthRequest->initRequest(requestType, url);
+    _oauthRequest->setHttpMethod(requestMethod);
+    _oauthRequest->setConsumerKey(_consumerKey);
+    _oauthRequest->setConsumerSecretKey(_consumerSecretKey);
+    return true;
+}
+
+bool Widget::setTokenAndSecretTokenToRequest()
+{
+    _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
+    _oauthRequest->setTokenSecret(
+                _oauthSettings->value("oauth_token_secret").toString());
+    return true;
 }
 
 bool Widget::initializeOwnPostsWidgets()
 {
-    QUrl url("https://api.twitter.com/1/statuses/user_timeline.json");
-    _oauthRequest->initRequest(KQOAuthRequest::AuthorizedRequest, url);
-    _oauthRequest->setHttpMethod(KQOAuthRequest::GET); // GET指定
-    _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-    _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-    _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
-    _oauthRequest->setTokenSecret(
-                _oauthSettings->value("oauth_token_secret").toString());
+    if( this->isOAuthed() == false){
+        qDebug() << "Not Verified Yet.";
+        return false;
+    }
 
+    qDebug("Initializing Own Posts");
+    initializeRequest(QUrl("http://api.twitter.com/1/statuses/user_timeline.json"),
+                      KQOAuthRequest::GET);
+    setTokenAndSecretTokenToRequest();
     KQOAuthParameters params;
-    params.insert("count", "131");
+    params.insert("count", QByteArray::number(LATEST_NUMBER_FOR_TIME).constData());
     _oauthRequest->setAdditionalParameters(params);
 
+    disconnect(_oauthManager, SIGNAL(requestReady(QByteArray)), 0, 0);
 
-    qDebug() << _oauthSettings->value("oauth_token").toString();
-    qDebug() << _oauthSettings->value("oauth_token_secret").toString();
-
-    disconnect(_oauthManager, SIGNAL(requestReady(QByteArray)));
+    // I cannot understand why this connection is invalid.
     connect(_oauthManager, SIGNAL(requestReady(QByteArray)),
-            this, SLOT(onRequestReadyOwnPosts(QByteArray)));
-
-    connect(_oauthManager, SIGNAL(authorizedRequestDone()),
-            this, SLOT(onAuthorizedRequestDone()));
+            this, SLOT(onRequestReadyOwnPosts(QByteArray)), Qt::UniqueConnection);
 
     _oauthManager->executeRequest(_oauthRequest);
 
+    connect(_oauthManager->networkManager(), SIGNAL(finished(QNetworkReply*)),
+            this, SLOT(on_showTimeLineButton_clicked()), Qt::UniqueConnection);
+
+    connect(_oauthManager->networkManager(), SIGNAL(finished(QNetworkReply*)),
+            this, SLOT(readOwnPosts(QNetworkReply*)), Qt::UniqueConnection);
     return true;
 }
 
-void Widget::slotError(QNetworkReply::NetworkError e)
+void Widget::readOwnPosts(QNetworkReply *r)
 {
-    qDebug() << "1" << e;
+    onRequestReadyOwnPosts(r->readAll());
 }
 
-void Widget::cState(QAbstractSocket::SocketState s)
+QByteArray Widget::makeAuthHeaderFrom(QList<QByteArray> requestParameters)
 {
-    qDebug() << "2" << s;
+    bool first = true;
+    QByteArray result;
+    foreach (const QByteArray header, requestParameters) {
+        if (!first) {
+            result.append(", ");
+        } else {
+            result.append("OAuth ");
+            first = false;
+        }
+        result.append(header);
+    }
+    return result;
 }
 
-void Widget::readyRead()
+bool Widget::isOAuthed()
 {
-    qDebug() << "3";
-    qDebug() << sock->readAll();
+    return _oauthSettings->value("oauth_token").toString().size()
+            + _oauthSettings->value("oauth_token_secret").toString().size() > 0;
 }
 
-void Widget::cError(QAbstractSocket::SocketError e)
+QString Widget::getValueOfMatchedKey()
 {
-    qDebug() << "oi" << e;
-    if(e == QAbstractSocket::SslHandshakeFailedError)
-    {
-        qDebug("@@@@");
+    QStringList list(_subject->getKeysHash()->keys());
+    unsigned int check = 0;
+    for(int i=0;i<list.size();++i){
+        if(list.at(i).startsWith(_subject->getKeyString()))
+            ++check;
+        if(check==2){
+            qDebug() << "There are too many candities.";
+            return "";
+        }
+    }
+    if(check==0){
+        qDebug() << "There is not such a short cut key.";
+        return "";
+    }
+    return _subject->getKeysHash()->value(_subject->getKeyString());
+}
+
+WidgetDomain* Widget::getWidgetDomain()
+{
+    return _subject;
+}
+
+void Widget::countDownClock(){
+    if(ui->tableWidget_2->rowCount() < LATEST_NUMBER_FOR_TIME)
+        return;
+    if(_latestTweetsForTime.getPostedDateTimeList().size() == 0)
+        return;
+    for(int i=0; i < ui->tableWidget_2->rowCount(); ++i){
+        //latest number for time
+        if(ui->tableWidget_2->item(i, 0) == NULL)
+            break;
+
+        QDateTime postedTime = _latestTweetsForTime.getPostedDateTimeList().at(i);
+        QDateTime fromNow = QDateTime::currentDateTime();
+        fromNow = fromNow.addYears(-postedTime.date().year());
+        fromNow = fromNow.addMonths(-postedTime.date().month());
+        fromNow = fromNow.addDays(-postedTime.date().day());
+        fromNow = fromNow.addSecs(-postedTime.time().hour()*60*60
+                                  -postedTime.time().minute()*60
+                                  -postedTime.time().second()
+                                  );
+        ui->tableWidget_2->setItem(
+                    LATEST_NUMBER_FOR_TIME - i - 1 , 1, new QTableWidgetItem(
+                        ( (postedTime.secsTo(QDateTime::currentDateTime()) > 60*60*24)
+                          ? (
+                                QString::number(postedTime.secsTo(QDateTime::currentDateTime())/(60*60*24))
+                                + (
+                                    (postedTime.secsTo(QDateTime::currentDateTime())/(60*60*24) == 1)
+                                    ? ( QString("day +") )
+                                    : ( QString("days +") )
+                                      )
+                                )
+                          : QString("")
+                            )
+                        + fromNow.toString("hh:mm:ss")
+                        )
+                    );
+        if(postedTime.secsTo(QDateTime::currentDateTime()) <= 60*60*3){
+            for(int j=0;j<ui->tableWidget_2->columnCount();++j){
+                if(ui->tableWidget_2->item(LATEST_NUMBER_FOR_TIME - i - 1,j)==NULL)
+                    continue;
+                ui->tableWidget_2->item(LATEST_NUMBER_FOR_TIME - i - 1,j)->setBackground(QBrush(QColor(255, 0, 0), Qt::SolidPattern));
+            }
+        }
     }
 }
 
-void Widget::receive(QList<QSslError> e)
+void Widget::updateData()
 {
-    for(int i=0;i<e.size();++i)
-    {
-        qDebug() << "ll" << i << e.at(i).errorString();
-    }
 }
 
-Widget::~Widget() {
-    //-------------------------
-    // kQAOuthオブジェクトの破棄
-    delete _oauthRequest;
-    delete _oauthManager;
-    //-------------------------
-    delete _oauthSettings;
-
-    delete ui;
+bool Widget::setConsumerKeyAndConsumerSecretSettings(){
+    _sizeSettings->beginGroup("consumerKey");
+    _sizeSettings->setValue("consumerKey", ui->consumerKeyLineEdit->text());
+    _sizeSettings->setValue("consumerSecretKey", ui->consumerSecretKeyLineEdit->text());
+    _sizeSettings->endGroup();
+    return true;
 }
 
 /*
   protected functions
   */
-void Widget::keyPressEvent(QKeyEvent *ke)
+void Widget::keyPressEvent(QKeyEvent *keyEvent)
 {
-    if(ke->isAutoRepeat())
-    {
+    if(keyEvent->isAutoRepeat()
+            || (keyEvent->modifiers()!=Qt::ControlModifier)
+            || (keyEvent->key()==Qt::Key_Control) )
         return;
-    }
     setAttribute(Qt::WA_KeyCompression);
-    QString key;
-    if( (ke->modifiers()==Qt::ControlModifier) && (ke->key()!=Qt::Key_Control) )
-    {
-        /*
+    /*
           0x00:^@
           0x00-0x1a:^A-^Z
           0x1b:^[
@@ -453,96 +461,52 @@ void Widget::keyPressEvent(QKeyEvent *ke)
           0x41-0x4a:A-Z
           ...
         */
-        if(ke->text().toAscii().toHex().toInt(0, 16) <= 31) //31 is 0x1f
-        {
-            key = QByteArray::fromHex(QByteArray::number(ke->text().toAscii().toHex().toInt(0, 16) + 64, 16));
+    QString key = (keyEvent->text().toAscii().toHex().toInt(0, 16) <= 31)
+            ? QByteArray::fromHex(QByteArray::number(keyEvent->text().toAscii().toHex().toInt(0, 16) + 64, 16))
+            : keyEvent->text();
+    _subject->setKeyString(_subject->getKeyString() + key.toLower());
+    qDebug() << "Pressed Keys :" << keyEvent->text() << _subject->getKeyString() << keyEvent->count();
+
+    for(int i=0;i<ui->buttonsGridLayout->count();++i){
+        if(dynamic_cast<ExtraPushButton*>(ui->buttonsGridLayout->itemAt(i)->widget())->getShortCutKey().indexOf(_subject->getKeyString())==0){
+            continue;
         }
-        else
-        {
-            key = ke->text();
-        }
-        _keyString.append(key.toLower());
-        qDebug() << ke->text() << _keyString << ke->count();
-        for(int i=0;i<ui->buttonsGridLayout->count();++i)
-        {
-            ExtraPushButton *p = dynamic_cast<ExtraPushButton*>(ui->buttonsGridLayout->itemAt(i)->widget());
-            if(p->getShortCutKey().indexOf(_keyString)==-1)
-            {
-                ui->buttonsGridLayout->itemAt(i)->widget()->setEnabled(false);
-            }
-        }
+        ui->buttonsGridLayout->itemAt(i)->widget()->setEnabled(false);
     }
 }
 
-void Widget::keyReleaseEvent(QKeyEvent *ke)
+void Widget::keyReleaseEvent(QKeyEvent *keyEvent)
 {
-    if(ke->isAutoRepeat())
-    {
+    if(keyEvent->isAutoRepeat()
+            ||  keyEvent->key()!=Qt::Key_Control
+            || _subject->getKeyString().size()==0 )
         return;
+    qDebug() << "ctrl!" << _subject->getKeyString();
+    QString tweet = getValueOfMatchedKey();
+    // Exception of Exchanging Strings
+    if(tweet.contains(QRegExp("\\(\\d.*\\)"))){
+        ui->plainTextEdit->setPlainText(tweet);
+        for(int i=0;i<ui->buttonsGridLayout->count();++i)
+            if(ui->buttonsGridLayout->itemAt(i)->widget()->isEnabled()==true)
+                ui->buttonsGridLayout->itemAt(i)->widget()->setEnabled(false);
+        ui->lineEdit_2->setFocus();
+    }else{
+        // Enable All Buttons
+        for(int i=0;i<ui->buttonsGridLayout->count();++i)
+            if(ui->buttonsGridLayout->itemAt(i)->widget()->isEnabled()==false)
+                ui->buttonsGridLayout->itemAt(i)->widget()->setEnabled(true);
+        sendTweet(tweet);
     }
-    if( ( ke->key()==Qt::Key_Control) && (_keyString.size()>0) )
-    {
-        qDebug() << "ctrl!" << _keyString;
-        QString tweet;
-        int matchedKeysNumber = 0;
-        QList<QString> list = _keysHash->keys();
-        for(int i=0;i<list.size();++i)
-        {
-            if(list.at(i).indexOf(_keyString)==0)
-            {
-                // Match
-                if(list.at(i).length() == _keyString.length())
-                {
-                    tweet = _keysHash->value(list.at(i));
-                    matchedKeysNumber = -1;
-                    break;
-                }
-                ++matchedKeysNumber;
-                tweet = _keysHash->value(list.at(i));
-            }
-        }
-
-        if(matchedKeysNumber>1)
-        {
-            tweet.clear();
-        }
-        _keyString.clear();
-        if(tweet.contains(QRegExp("\\(\\d.*\\)")))
-        {
-            ui->plainTextEdit->setPlainText(tweet);
-            for(int i=0;i<ui->buttonsGridLayout->count();++i)
-            {
-                if(ui->buttonsGridLayout->itemAt(i)->widget()->isEnabled()==true)
-                {
-                    ui->buttonsGridLayout->itemAt(i)->widget()->setEnabled(false);
-                }
-            }
-            ui->lineEdit_2->setFocus();
-        }
-        else
-        {
-            for(int i=0;i<ui->buttonsGridLayout->count();++i)
-            {
-                if(ui->buttonsGridLayout->itemAt(i)->widget()->isEnabled()==false)
-                {
-                    ui->buttonsGridLayout->itemAt(i)->widget()->setEnabled(true);
-                }
-            }
-            if(tweet.size()==0)
-            {
-                qDebug() << "There is not such a short cut key.";
-                return;
-            }
-            sendTweet(tweet);
-        }
-        tweet.clear();
-    }
+    _subject->setKeyString("");
+    tweet.clear();
 }
 
 void Widget::resizeEvent(QResizeEvent *)
 {
+    _sizeSettings->beginGroup("size");
     _sizeSettings->setValue("width", width());
     _sizeSettings->setValue("height", height());
+    _sizeSettings->endGroup();
     //replace buttons.
     int beforeColumnsNumber =0;
     for(int i=ui->buttonsGridLayout->columnCount()-1;i>=0;--i)
@@ -553,47 +517,38 @@ void Widget::resizeEvent(QResizeEvent *)
             break;
         }
     }
-    if(beforeColumnsNumber==0)
-    {
+    if(beforeColumnsNumber==0) {
         return;
     }
 
     QRect r;
-    for(int i=beforeColumnsNumber-1;i>=0;--i)
-    {
-        if(ui->buttonsGridLayout->itemAtPosition(0, i)!=NULL)
-        {
+    for(int i=beforeColumnsNumber-1;i>=0;--i){
+        if(ui->buttonsGridLayout->itemAtPosition(0, i)!=NULL){
             r = ui->buttonsGridLayout->itemAtPosition(0, i)->widget()->frameGeometry();
             break;
         }
     }
 
     // When widget size becomes too small.
-    if(r.x()+r.width() > ui->groupBox->frameGeometry().x()+ui->groupBox->frameGeometry().width())
-    {
+    if(r.x()+r.width() > ui->groupBox->frameGeometry().x()+ui->groupBox->frameGeometry().width()){
         int afterColumnsNumber = 0;
-        for(int i=beforeColumnsNumber-1;i>=0;--i)
-        {
+        for(int i=beforeColumnsNumber-1;i>=0;--i){
             r = ui->buttonsGridLayout->itemAtPosition(0,i)->widget()->frameGeometry();
             if(r.x()+r.width()
-                    < ui->groupBox->frameGeometry().x()+ui->groupBox->frameGeometry().width())
-            {
+                    < ui->groupBox->frameGeometry().x()+ui->groupBox->frameGeometry().width()){
                 afterColumnsNumber = i+1;
                 break;
             }
         }
-        if(afterColumnsNumber==0)
-        {
+        if(afterColumnsNumber==0) {
             return;
         }
         QList<QLayoutItem*> *list = new QList<QLayoutItem*>();
-        while(ui->buttonsGridLayout->itemAt(0)!=NULL)
-        {
+        while(ui->buttonsGridLayout->itemAt(0)!=NULL){
             list->append(ui->buttonsGridLayout->itemAt(0)); // There are only extraPushButtons.
             ui->buttonsGridLayout->removeItem(ui->buttonsGridLayout->itemAt(0));
         }
-        for(int i=0;i<list->size();++i)
-        {
+        for(int i=0;i<list->size();++i){
             ui->buttonsGridLayout->addItem(list->at(i),
                                            floor((double)i/(double)afterColumnsNumber),
                                            i%afterColumnsNumber);
@@ -601,37 +556,28 @@ void Widget::resizeEvent(QResizeEvent *)
     }
     // When widget size becomes too big
     else if(r.x() + r.width() + ui->buttonsGridLayout->horizontalSpacing() + r.width()
-            < ui->groupBox->x() + ui->groupBox->frameGeometry().width())
-    {
+            < ui->groupBox->x() + ui->groupBox->frameGeometry().width()){
         int afterColumnsNumber = 0;
-        for(int i=1;i<200;++i)
-        {
+        for(int i=1;i<200;++i){
             if(r.x()+r.width() + i*(ui->buttonsGridLayout->horizontalSpacing() + ui->buttonsGridLayout->itemAt(0)->widget()->width())
-                    > ui->groupBox->frameGeometry().x()+ui->groupBox->frameGeometry().width())
-            {
+                    > ui->groupBox->frameGeometry().x()+ui->groupBox->frameGeometry().width()){
                 afterColumnsNumber = beforeColumnsNumber+i;
                 break;
             }
         }
-        if(afterColumnsNumber > ui->buttonsGridLayout->count() || afterColumnsNumber==0)
-        {
+        if(afterColumnsNumber > ui->buttonsGridLayout->count() || afterColumnsNumber==0){
             return;
         }
         QList<QLayoutItem*> *list = new QList<QLayoutItem*>();
-        while(ui->buttonsGridLayout->itemAt(0)!=NULL)
-        {
+        while(ui->buttonsGridLayout->itemAt(0)!=NULL){
             list->append(ui->buttonsGridLayout->itemAt(0)); // There are only extraPushButtons.
             ui->buttonsGridLayout->removeItem(ui->buttonsGridLayout->itemAt(0));
         }
-        for(int i=0;i<list->size();++i)
-        {
+        for(int i=0;i<list->size();++i){
             ui->buttonsGridLayout->addItem(list->at(i),
                                            floor((double)i/(double)afterColumnsNumber),
                                            i%afterColumnsNumber);
         }
-    }
-    else
-    {
     }
 }
 
@@ -647,22 +593,21 @@ void Widget::showEvent(QShowEvent *)
   */
 void Widget::onTemporaryTokenReceived(QString token, QString tokenSecret)
 {
-    QUrl userAuthURL("https://api.twitter.com/oauth/authorize");
-
-    if( _oauthManager->lastError() == KQOAuthManager::NoError) {
-        qDebug() << "Opening authorization web site: " << userAuthURL;
-        _oauthManager->getUserAuthorization(userAuthURL);
+    if( _oauthManager->lastError() != KQOAuthManager::NoError) {
+        return;
     }
+    qDebug() << "Opening authorization web site: " << QUrl("https://api.twitter.com/oauth/authorize");
+    _oauthManager->getUserAuthorization(QUrl("https://api.twitter.com/oauth/authorize"));
 }
 
 void Widget::onAuthorizationReceived(QString token, QString verifier)
 {
     qDebug() << "User authorization received: " << token << verifier;
 
-    _oauthManager->getUserAccessTokens(
-                QUrl(tr("https://api.twitter.com/oauth/access_token")));
+    _oauthManager->getUserAccessTokens(QUrl(tr("https://api.twitter.com/oauth/access_token")));
     if (_oauthManager->lastError() != KQOAuthManager::NoError) {
-        QCoreApplication::exit();
+        showOAuthError(_oauthManager->lastError());
+        //QCoreApplication::exit();
     }
 }
 
@@ -676,6 +621,7 @@ void Widget::onAccessTokenReceived(QString token, QString tokenSecret)
     qDebug() << "Access tokens now stored. "
                 "You are ready to send Tweets from user's account!";
 
+    this->initializeOwnPostsWidgets();
     //QCoreApplication::exit();
 }
 
@@ -686,297 +632,330 @@ void Widget::onAuthorizedRequestDone() {
 
 void Widget::onRequestReady(QByteArray response)
 {
+    if(response.size()<=0){
+        showOAuthError(_oauthManager->lastError());
+        return;
+    }
     qDebug() << "Response from the service: " << response;
 }
 
-void Widget::on_pushButton_clicked() {
-    ui->lineEdit->setEnabled(true);
-    ui->pushButton_3->setEnabled(true);
+void Widget::on_authorizationButton_clicked() {
+    qDebug() << "Attempting new consumer key and consumer secret.";
 
-    //--------------------------
-    // kQOAuthのスロットの登録
+    _subject->getReplyOfUserStreamsAPI()->disconnect(this);
+    _subject->getReplyOfUserStreamsAPI()->disconnect(SIGNAL(error(QNetworkReply::NetworkError)));
+
+    this->setConsumerKeyAndConsumerSecretSettings();
+    this->setConsumerKeyAndConsumerSecret();
+    ui->lineEdit->clear();
+    _oauthSettings->clear();
+    ui->lineEdit->setEnabled(true);
+    ui->verificationButton->setEnabled(true);
+
+    delete _oauthManager;
+    _oauthManager = new KQOAuthManager();
+    this->initializeKQOAuth();
+    this->initializeOwnPostsWidgets();
+
+    // kQOAuth Slots
     connect(_oauthManager, SIGNAL(temporaryTokenReceived(QString,QString)),
-            this, SLOT(onTemporaryTokenReceived(QString, QString)));
+            this, SLOT(onTemporaryTokenReceived(QString, QString)), Qt::UniqueConnection);
 
     connect(_oauthManager, SIGNAL(authorizationReceived(QString,QString)),
-            this, SLOT( onAuthorizationReceived(QString, QString)));
+            this, SLOT(onAuthorizationReceived(QString, QString)), Qt::UniqueConnection);
 
     connect(_oauthManager, SIGNAL(accessTokenReceived(QString,QString)),
-            this, SLOT(onAccessTokenReceived(QString,QString)));
+            this, SLOT(onAccessTokenReceived(QString,QString)), Qt::UniqueConnection);
 
     connect(_oauthManager, SIGNAL(requestReady(QByteArray)),
-            this, SLOT(onRequestReady(QByteArray)));
-    //--------------------------
+            this, SLOT(onRequestReady(QByteArray)), Qt::UniqueConnection);
 
-    //----------------
-    // OAuth認証実行
+    // Start OAuth Verification.
+    this->initializeRequest(QUrl("https://api.twitter.com/oauth/request_token"),
+                            KQOAuthRequest::POST,
+                            KQOAuthRequest::TemporaryCredentials);
 
-    // リクエストの初期化
-    _oauthRequest->initRequest(KQOAuthRequest::TemporaryCredentials,
-                               QUrl("https://api.twitter.com/oauth/request_token"));
-
-    // コンシューマキー設定
-    _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-    _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-
-    // 認証処理のハンドリングを有効にする
     _oauthManager->setHandleUserAuthorization(true);
-    //  _oauthManager->setHandleUserAuthorization(false);
+    //_oauthManager->setHandleUserAuthorization(false);
 
-    // 認証実行
     _oauthManager->executeRequest(_oauthRequest);
 
-    // エラーチェック
-    int e = _oauthManager->lastError();
-    if (e != KQOAuthManager::NoError) {
-        showOAuthError(e);
+    // Checking Error
+    if (_oauthManager->lastError() != KQOAuthManager::NoError) {
+        qDebug("authorization error");
+        showOAuthError(_oauthManager->lastError());
     }
-    //----------------
 }
 
-void Widget::on_pushButton_2_clicked() {
-    //ui->pushButton_2->setEnabled(false);
+void Widget::on_showTimeLineButton_clicked() {
+    disconnect(_oauthManager->networkManager(), SIGNAL(finished(QNetworkReply*)),
+               this, SLOT(on_showTimeLineButton_clicked()));
+
+    if( this->isOAuthed() == false){
+        qDebug() << "Not Verified Yet.";
+        return;
+    }
+    qDebug("Attempting reading TimeLine.");
+
     ui->listWidget->clear();
 
-    QUrl url("https://api.twitter.com/1/statuses/home_timeline.json");
-    _oauthRequest->initRequest(KQOAuthRequest::AuthorizedRequest, url);
-    _oauthRequest->setHttpMethod(KQOAuthRequest::GET); // GET指定
-    _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-    _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-    _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
-    _oauthRequest->setTokenSecret(
-                _oauthSettings->value("oauth_token_secret").toString());
+    //QUrl("https://api.twitter.com/1/statuses/home_timeline.json");
+    initializeRequest(QUrl("https://userstream.twitter.com/2/user.json"),
+                      KQOAuthRequest::GET);
+    setTokenAndSecretTokenToRequest();
 
-    qDebug() << _oauthSettings->value("oauth_token").toString();
-    qDebug() << _oauthSettings->value("oauth_token_secret").toString();
-
-    disconnect(_oauthManager, SIGNAL(requestReady(QByteArray)),0,0);
     connect(_oauthManager, SIGNAL(requestReady(QByteArray)),
-            this, SLOT(onRequestReadyTimeline(QByteArray)));
+            this, SLOT(onRequestReadyTimeline(QByteArray)), Qt::UniqueConnection);
 
     //    connect(_oauthManager, SIGNAL(authorizedRequestDone()),
     //            this, SLOT(onAuthorizedRequestDone()));
 
-    _oauthManager->executeRequest(_oauthRequest);
+    //_oauthManager->executeRequest(_oauthRequest);
+    this->SSLconnect(_oauthRequest);
+
+    if (_oauthManager->lastError() != KQOAuthManager::NoError) {
+        qDebug("Showing timeline error.");
+        showOAuthError(_oauthManager->lastError());
+    }
 }
 
 void Widget::onRequestReadyTimeline(QByteArray response) {
-    qDebug() << "requestReady-Timeline";
-    QDomDocument dom;
+    qDebug("Reading TimeLine");
     // For JSON
-    if(dom.setContent(response)==false)
-    {
-        QJson::Parser parser;
-        bool ok =false;
-        QVariant top = parser.parse(response, &ok);
-        if(!ok)
-        {
-            qDebug() << response.size() << response << "json error";
-            return;
-        }
-
-        //QVariantMap result = top.toMap();
-        QVariantList contentList = top.toList();
-
-        foreach ( QVariant content, contentList ){
-            /*
-            qDebug() <<
-                        content.toMap()["contributors"] <<
-                        "\n" <<
-                        content.toMap()["coordinates"] <<
-                        "\n" <<
-                        content.toMap()["created_at"].toString() <<
-                        "\n" <<
-                        content.toMap()["geo"]<<
-                        "\n" <<
-                        content.toMap()["id"].toLongLong() <<
-                        "\n" <<
-                        content.toMap()["id_str"].toString() <<
-                        "\n" <<
-                        content.toMap()["in_reply_to_screen_name"] <<
-                        "\n" <<
-                        content.toMap()["in_reply_to_status_id"]<<
-                        "\n" <<
-                        content.toMap()["in_reply_to_status_id"] <<
-                        "\n" <<
-                        content.toMap()["in_reply_to_user_id"] <<
-                        "\n" <<
-                        content.toMap()["in_reply_to_user_id_str"] <<
-                        "\n" <<
-                        content.toMap()["place"] <<
-                        "\n" <<
-                        content.toMap()["possibly_sensitive"].toBool() <<
-                        "\n" <<
-                        content.toMap()["retweet_count"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["retweeted"].toBool() <<
-                        "\n" <<
-                        content.toMap()["text"].toString() <<
-                        "\n" <<
-                        content.toMap()["truncated"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["contributors_enabled"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["created_at"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["default_profile"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["default_profile_image"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["description"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["favourites_count"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["followers_count"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["following"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["friends_count"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["geo_enabled"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["id"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["id_str"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["is_translator"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["lang"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["listed_count"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["location"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_background_color"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_background_image_url"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_background_image_url_https"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_background_tile"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_image_url_https"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_sidebar_border_color"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_sidebar_fill_color"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_text_color"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["profile_use_background_image"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["protected"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["screen_name"].toBool() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["show_all_inline_media"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["statuses_count"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["time_zone"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["url"].toString() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["utc_offset"].toULongLong() <<
-                        "\n" <<
-                        content.toMap()["user"].toMap()["verified"].toBool() <<
-                        "\n\n";
-*/
-            ui->listWidget->addItem(content.toMap()["text"].toString());
-        }
+    qDebug("This is JSON format.");
+    if(response.startsWith("{\"friends\":[")) { // User Streams
+        response = QString(response).remove(QRegExp("(\\{\"friends\":\\[[\\d,]+\\]\\}|\\r|\\n)")).toUtf8();
+    }
+    value value;
+    string error;
+    parse(value, response.data(), response.data() + response.size(), &error);
+    if (!error.empty()){
+        cerr << error << endl;
         return;
     }
-    // for XML
-    else
-    {
-        QDomElement root = dom.documentElement();
-        QDomNode node;
-        node = root.firstChild();
-        while ( !node.isNull() )
+    object jsonObject;
+    if(value.to_str() == string("array")){
+        array jsonArray = value.get<array>();
+        array::iterator it;
+        ui->listWidget->clear();
+        for (it = jsonArray.begin(); it != jsonArray.end(); ++it)
         {
-            if ( node.isElement() && (node.nodeName() == "status" ) )
-            {
-                QDomElement header = node.toElement();
-
-                QDomNode node = header.firstChild();
-                while ( !node.isNull() )
-                {
-                    if ( node.isElement() )
-                    {
-                        // いろいろなヘッダエントリの場合
-                        if ( node.nodeName() == "text" )
-                        {
-                            QDomText textChild = node.firstChild().toText();
-                            if ( !textChild.isNull() )
-                            {
-                                ui->listWidget->addItem(textChild.nodeValue());
-                            }
-                        }
-                    }
-                    node = node.nextSibling();
-                }
+            jsonObject = it->get<object>();
+            qDebug() << QString::fromStdString(jsonObject["text"].to_str());
+            if(!QString::fromStdString(jsonObject["text"].to_str()).contains("#commando")){
+                ui->listWidget->addItem(QString::fromStdString(jsonObject["text"].to_str()));
             }
-            node = node.nextSibling();
         }
     }
+    else if(value.to_str() == string("object")){
+        jsonObject = value.get<object>();
+        qDebug() << QString::fromStdString(jsonObject["text"].to_str());
+        if(QString::fromStdString(jsonObject["text"].to_str()).contains("#commando")){
+            ui->listWidget->addItem(QString::fromStdString(jsonObject["text"].to_str()));
+        }
+    }
+    ui->listWidget->scrollToBottom();
+    /*
+            qDebug() <<
+                        ["contributors"] <<
+                        "\n" <<
+                        ["coordinates"] <<
+                        "\n" <<
+                        ["created_at"].toString() <<
+                        "\n" <<
+                        ["geo"]<<
+                        "\n" <<
+                        ["id"].toLongLong() <<
+                        "\n" <<
+                        ["id_str"].toString() <<
+                        "\n" <<
+                        ["in_reply_to_screen_name"] <<
+                        "\n" <<
+                        ["in_reply_to_status_id"]<<
+                        "\n" <<
+                        ["in_reply_to_status_id"] <<
+                        "\n" <<
+                        ["in_reply_to_user_id"] <<
+                        "\n" <<
+                        ["in_reply_to_user_id_str"] <<
+                        "\n" <<
+                        ["place"] <<
+                        "\n" <<
+                        ["possibly_sensitive"].toBool() <<
+                        "\n" <<
+                        ["retweet_count"].toULongLong() <<
+                        "\n" <<
+                        ["retweeted"].toBool() <<
+                        "\n" <<
+                        ["text"].toString() <<
+                        "\n" <<
+                        ["truncated"].toBool() <<
+                        "\n" <<
+                        ["user"]["contributors_enabled"].toBool() <<
+                        "\n" <<
+                        ["user"]["created_at"].toString() <<
+                        "\n" <<
+                        ["user"]["default_profile"].toBool() <<
+                        "\n" <<
+                        ["user"]["default_profile_image"].toBool() <<
+                        "\n" <<
+                        ["user"]["description"].toString() <<
+                        "\n" <<
+                        ["user"]["favourites_count"].toULongLong() <<
+                        "\n" <<
+                        ["user"]["followers_count"].toULongLong() <<
+                        "\n" <<
+                        ["user"]["following"].toBool() <<
+                        "\n" <<
+                        ["user"]["friends_count"].toULongLong() <<
+                        "\n" <<
+                        ["user"]["geo_enabled"].toBool() <<
+                        "\n" <<
+                        ["user"]["id"].toULongLong() <<
+                        "\n" <<
+                        ["user"]["id_str"].toString() <<
+                        "\n" <<
+                        ["user"]["is_translator"].toBool() <<
+                        "\n" <<
+                        ["user"]["lang"].toString() <<
+                        "\n" <<
+                        ["user"]["listed_count"].toULongLong() <<
+                        "\n" <<
+                        ["user"]["location"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_background_color"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_background_image_url"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_background_image_url_https"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_background_tile"].toBool() <<
+                        "\n" <<
+                        ["user"]["profile_image_url_https"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_sidebar_border_color"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_sidebar_fill_color"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_text_color"].toString() <<
+                        "\n" <<
+                        ["user"]["profile_use_background_image"].toString() <<
+                        "\n" <<
+                        ["user"]["protected"].toBool() <<
+                        "\n" <<
+                        ["user"]["screen_name"].toBool() <<
+                        "\n" <<
+                        ["user"]["show_all_inline_media"].toString() <<
+                        "\n" <<
+                        ["user"]["statuses_count"].toULongLong() <<
+                        "\n" <<
+                        ["user"]["time_zone"].toString() <<
+                        "\n" <<
+                        ["user"]["url"].toString() <<
+                        "\n" <<
+                        ["user"]["utc_offset"].toULongLong() <<
+                        "\n" <<
+                        ["user"]["verified"].toBool() <<
+                        "\n\n";
+*/
 }
 
 void Widget::onRequestReadyOwnPosts(QByteArray response) {
-    qDebug() << "requestReady-OwnPosts";
-    // for JSON
-    QDomDocument dom;
-    if(dom.setContent(response)==false)
-    {
-        QJson::Parser parser;
-        bool ok =false;
-        QVariant top = parser.parse(response, &ok);
-        if(!ok)
-        {
-            qDebug() << response.size() << response << "json error";
-            return;
-        }
-        qDebug() << "top.list.size:" << top.toList().size();
-        qDebug() << "top.map.size:" << top.toMap().size();
-
-        //QVariantMap result = top.toMap();
-        QVariantList contentList = top.toList();
-
-        for(int i=0;i<contentList.size();++i)
-        {
-            QVariant content = contentList.at(i);
-            ui->tableWidget_2->setItem(ui->tableWidget_2->rowCount()-i-1, 0, new QTableWidgetItem(content.toMap()["created_at"].toString().mid(8,11)));
-            if(i<10)
-            {
-                ui->tableWidget->setItem(9-i,0, new QTableWidgetItem(content.toMap()["text"].toString()));
-            }
-        }
+    qDebug() << "Request ready own posts";
+    // For JSON
+    qDebug("This is JSON format.");
+    value valueA;
+    string error;
+    parse(valueA, response.data(), response.data() + response.size(), &error);
+    if (!error.empty()){
+        qDebug() << response;
+        cerr << error << endl;
         return;
+    }
+    object jsonObject;
+    if(valueA.to_str() == string("array")){
+        int tweetNumberBeforeNow=0;
+        QHash<QString, int> monthsHash;
+        monthsHash.insert("Jan", 1);
+        monthsHash.insert("Feb", 2);
+        monthsHash.insert("Mar", 3);
+        monthsHash.insert("Apr", 4);
+        monthsHash.insert("May", 5);
+        monthsHash.insert("Jun", 6);
+        monthsHash.insert("Jul", 7);
+        monthsHash.insert("Aug", 8);
+        monthsHash.insert("Sep", 9);
+        monthsHash.insert("Oct", 10);
+        monthsHash.insert("Nov", 11);
+        monthsHash.insert("Dec", 12);
+
+        for(array::iterator it = valueA.get<array>().begin(); it != valueA.get<array>().end(); ++it){
+            jsonObject = it->get<object>();
+            //latest 130
+            // When latest 127 posts are in 3 hours, a new post is forbidden.
+            // as "Sat Feb 25 15:55:23 +0000 2012"
+            QStringList dateTimeElements = QString::fromStdString(jsonObject["created_at"].to_str()).split(" ");
+            QStringList timeElements = dateTimeElements.at(3).split(":");
+            QDateTime postedDateTime = QDateTime(QDate(dateTimeElements.at(5).toInt(),
+                                                       monthsHash.value(dateTimeElements.at(1)),
+                                                       dateTimeElements.at(2).toInt()
+                                                       ),
+                                                 QTime(timeElements.at(0).toInt(),
+                                                       timeElements.at(1).toInt(),
+                                                       timeElements.at(2).toInt()
+                                                       ),
+                                                 Qt::UTC
+                                                 ).toTimeSpec(Qt::LocalTime);
+            _latestTweetsForTime.appendPostedDateTimeList(postedDateTime);
+
+            ui->tableWidget_2->setItem(
+                        LATEST_NUMBER_FOR_TIME - tweetNumberBeforeNow - 1, 0,
+                        new QTableWidgetItem(
+                            postedDateTime.toString("dd,  hh:mm:ss")
+                            )
+                        );
+
+            //latest 10
+            if(tweetNumberBeforeNow<10){
+                ui->tableWidget->setItem(10-tweetNumberBeforeNow-1, 0, new QTableWidgetItem(QString::fromStdString(jsonObject["text"].to_str()))); //posted contents
+            }
+            ++tweetNumberBeforeNow;
+        }
+    }
+    else if(valueA.to_str() == string("object")){
+        jsonObject = valueA.get<object>();
+        qDebug() << QString::fromStdString(jsonObject["text"].to_str());
+        if(QString::fromStdString(jsonObject["text"].to_str()).contains("#commando")){
+            ui->listWidget->addItem(QString::fromStdString(jsonObject["text"].to_str()));
+        }
     }
 }
 
 void Widget::sendTweet(QString tweet) {
 
-    if( _oauthSettings->value("oauth_token").toString().isEmpty() ||
-            _oauthSettings->value("oauth_token_secret").toString().isEmpty()) {
+    if( this->isOAuthed() == false) {
         qDebug() << "No access tokens. Aborting.";
-
+        return;
+    }
+    if(tweet.size()==0)
+    {
+        qDebug() << "There are no characters.";
         return;
     }
 
-    _oauthRequest->initRequest(KQOAuthRequest::AuthorizedRequest,
-                               QUrl("http://api.twitter.com/1/statuses/update.xml")
-                               );
-    _oauthRequest->setConsumerKey("nXrjGagSLIQxCC4AmJ1J3g");
-    _oauthRequest->setConsumerSecretKey("QkTRr36zT6wAMERWqKUefyshxXIeaGzPKxB5pwMN0tg");
-    _oauthRequest->setToken(_oauthSettings->value("oauth_token").toString());
-    _oauthRequest->setTokenSecret(_oauthSettings->value("oauth_token_secret").toString());
+    tweet.replace(QRegExp("\\(\\d+:([^()]+)\\)"), "\\1");
+    tweet.append(" #commando");
 
+    initializeRequest(QUrl("https://api.twitter.com/1/statuses/update.xml"));
+    setTokenAndSecretTokenToRequest();
     KQOAuthParameters params;
     params.insert("status", tweet);
     _oauthRequest->setAdditionalParameters(params);
 
+    disconnect(_oauthManager, SIGNAL(requestReady(QByteArray)),0,0);
+
     qDebug() << "Attempting send tweet such as " << tweet;
-    //_oauthManager->executeRequest(_oauthRequest);
+    _oauthManager->executeRequest(_oauthRequest);
 
     ui->tableWidget->removeRow(0);
     ui->tableWidget->setRowCount(ui->tableWidget->rowCount()+1);
@@ -988,7 +967,7 @@ void Widget::sendTweet(QString tweet) {
     //    connect(_oauthManager, SIGNAL(authorizedRequestReady()),
     //         this, SLOT(onAuthorizedRequestReady()));
 
-    // LineEdits must cleare content.
+    // LineEdits must clear contents.
     ui->lineEdit_2->clear();
     ui->lineEdit_3->clear();
     ui->lineEdit_4->clear();
@@ -1001,23 +980,17 @@ void Widget::showOAuthError(const int nErrNum)
     qDebug() << "error is " << nErrNum;
 }
 
-void Widget::on_pushButton_3_clicked()
+void Widget::on_verificationButton_clicked()
 {
     ui->lineEdit->setEnabled(false);
-    ui->pushButton_3->setEnabled(false);
+    ui->verificationButton->setEnabled(false);
     _oauthSettings->setValue("number", ui->lineEdit->text());
-    _oauthManager->onVerificationReceived1(ui->lineEdit->text());
+    _oauthManager->onVerificationReceived1(_oauthSettings->value("number").toString());
 }
 
-void Widget::on_lineEdit_2_editingFinished()
-{
-    //lineEditの継承クラスにCtrl+Enter押し下し時の処置：(\d)との置換：を記述する
-}
-
-void Widget::on_pushButton_4_clicked()
+void Widget::on_postButton_clicked()
 {
     QString tweet = ui->plainTextEdit->toPlainText();
-    tweet.replace(QRegExp("\\(\\d+:([^()]+)\\)"), "\\1");
     sendTweet(tweet);
 }
 
@@ -1055,4 +1028,31 @@ bool Widget::replacePlainTextEditContent(int i, QString str)
         ui->plainTextEdit->setPlainText(text);
     }
     return true;
+}
+
+bool Widget::SetButtonsEnable(bool on)
+{
+    for(int i=0;i<ui->buttonsGridLayout->count();++i)
+    {
+        if(ui->buttonsGridLayout->itemAt(i)->widget()->isEnabled()== (!on))
+        {
+            ui->buttonsGridLayout->itemAt(i)->widget()->setEnabled(on);
+        }
+    }
+    return true;
+}
+
+void Widget::on_proxyButton_clicked()
+{
+    _proxy->setHostName(ui->proxyHostNameLineEdit->text());
+    _proxy->setPort(ui->proxyPortLineEdit->text().toInt());
+    _proxy->setUser(ui->proxyUserLineEdit->text());
+    _proxy->setUser(ui->proxyPasswordLineEdit->text());
+
+    _sizeSettings->beginGroup("proxy");
+    _sizeSettings->setValue("hostName", ui->proxyHostNameLineEdit->text());
+    _sizeSettings->setValue("port", ui->proxyPortLineEdit->text());
+    _sizeSettings->setValue("user", ui->proxyUserLineEdit->text());
+    _sizeSettings->setValue("password", ui->proxyPasswordLineEdit->text());
+    _sizeSettings->endGroup();
 }
